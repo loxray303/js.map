@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JS Source Map Viewer</title>
+<style>
+:root{--bg:#0b0e13;--panel:#11161d;--panel2:#171d26;--border:#27303b;--text:#e8edf3;--muted:#8d98a7;--accent:#66a3ff;--good:#65d69a}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;height:100vh;overflow:hidden}
+button,input{font:inherit}.app{height:100vh;display:flex;flex-direction:column}.top{height:64px;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid var(--border);background:#0e1218}
+.logo{font-weight:800;font-size:18px;letter-spacing:-.3px}.logo span{color:var(--accent)}.spacer{flex:1}
+.btn{border:1px solid var(--border);background:var(--panel2);color:var(--text);padding:9px 13px;border-radius:8px;cursor:pointer}.btn:hover{border-color:#3d4b5e;background:#1b222c}.btn.primary{background:#2563eb;border-color:#2563eb}.btn.primary:hover{background:#3575f2}
+.drop{margin:16px;border:1px dashed #405065;border-radius:12px;padding:12px 18px;color:var(--muted);display:flex;align-items:center;gap:12px;transition:.15s}.drop.active{border-color:var(--accent);background:#101b2c;color:var(--text)}
+.main{min-height:0;flex:1;display:flex}.sidebar{width:300px;border-right:1px solid var(--border);display:flex;flex-direction:column;min-width:220px}.sidehead{padding:12px;border-bottom:1px solid var(--border);display:flex;gap:8px}.search{width:100%;background:#0b1016;border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:7px;outline:none}.search:focus{border-color:#4777b8}.files{overflow:auto;padding:7px}.file{padding:8px 10px;border-radius:7px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#b9c2ce}.file:hover{background:#18202a}.file.active{background:#1b3558;color:#fff}.content{min-width:0;flex:1;display:flex;flex-direction:column}.tabs{height:45px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:3px;padding:0 10px;background:#0e131a}.tab{padding:7px 10px;border-radius:6px;color:var(--muted);cursor:pointer}.tab.active{background:var(--panel2);color:var(--text)}.editor{flex:1;min-height:0;overflow:auto;background:#0a0d12}.code{margin:0;padding:18px 22px;font:13px/1.65 "SFMono-Regular",Consolas,"Liberation Mono",monospace;white-space:pre;tab-size:2;counter-reset:line}.line{display:block;min-height:21px}.ln{display:inline-block;width:52px;color:#4f5b69;text-align:right;padding-right:18px;user-select:none}.src{color:#d7dee8}.empty{height:100%;display:grid;place-items:center;color:var(--muted);text-align:center;padding:30px}.empty strong{display:block;color:var(--text);font-size:20px;margin-bottom:7px}.meta{width:360px;border-left:1px solid var(--border);background:#0e1319;display:flex;flex-direction:column}.meta h3{font-size:13px;margin:0;padding:13px;border-bottom:1px solid var(--border)}.meta pre{margin:0;padding:14px;overflow:auto;color:#b9c7d8;font:12px/1.6 monospace}.status{height:27px;border-top:1px solid var(--border);padding:5px 12px;color:var(--muted);font-size:11px}
+@media(max-width:900px){.meta{display:none}.sidebar{width:240px}}@media(max-width:600px){.sidebar{width:190px}.drop{margin:8px}.top{padding:0 10px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="logo">JS<span>.map</span> Viewer</div>
+    <div class="spacer"></div>
+    <label class="btn primary">Open .map<input id="picker" type="file" accept=".map,application/json" hidden></label>
+    <button class="btn" id="clear">Clear</button>
+  </header>
+
+  <div id="drop" class="drop">Drop a <b>.js.map</b> file here, or use <b>Open .map</b>. Everything is processed locally in your browser.</div>
+
+  <main class="main">
+    <aside class="sidebar">
+      <div class="sidehead"><input id="filter" class="search" placeholder="Filter source files…"></div>
+      <div id="files" class="files"></div>
+    </aside>
+    <section class="content">
+      <div class="tabs"><div id="sourceTab" class="tab active">Source</div><div id="jsonTab" class="tab">Raw JSON</div></div>
+      <div id="editor" class="editor"><div class="empty"><div><strong>No source map loaded</strong>Open or drop a JavaScript source map to inspect its recovered sources.</div></div></div>
+      <div class="status" id="status">Ready</div>
+    </section>
+    <aside class="meta">
+      <h3>Source Map Metadata</h3>
+      <pre id="meta">{}</pre>
+    </aside>
+  </main>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let map = null, current = -1, raw = "", files = [];
+
+  function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+  function prettySource(s){
+    const lines=String(s??"").replace(/\r\n?/g,"\n").split("\n");
+    return '<pre class="code">'+lines.map((x,i)=>'<span class="line"><span class="ln">'+String(i+1).padStart(5," ")+'</span><span class="src">'+esc(x)+'</span></span>').join("")+'</pre>';
+  }
+  function setStatus(t){$("status").textContent=t}
+  function sourceName(i){
+    const root=map?.sourceRoot||"";
+    return (root && !files[i].startsWith(root) ? root : "") + files[i];
+  }
+  function renderFiles(){
+    const q=$("filter").value.toLowerCase();
+    $("files").innerHTML="";
+    files.forEach((f,i)=>{
+      if(q && !f.toLowerCase().includes(q)) return;
+      const d=document.createElement("div");
+      d.className="file"+(i===current?" active":"");
+      d.title=f; d.textContent=f;
+      d.onclick=()=>selectSource(i);
+      $("files").appendChild(d);
+    });
+  }
+  function selectSource(i){
+    current=i; renderFiles();
+    const content=map.sourcesContent?.[i];
+    $("sourceTab").classList.add("active"); $("jsonTab").classList.remove("active");
+    $("editor").innerHTML=content==null
+      ? '<div class="empty"><div><strong>Source content unavailable</strong>This source map references <code>'+esc(sourceName(i))+'</code> but does not embed its source.</div></div>'
+      : prettySource(content);
+    setStatus(`${i+1}/${files.length} · ${sourceName(i)} · ${content==null?"reference only":content.length.toLocaleString()+" chars"}`);
+  }
+  function load(text,name){
+    try{
+      const obj=JSON.parse(text);
+      if(!obj || typeof obj!=="object") throw new Error("Not a JSON object");
+      if(obj.version===undefined) throw new Error("This does not look like a source map (missing version).");
+      map=obj; raw=text;
+      files=Array.isArray(obj.sources)?obj.sources.map(String):[];
+      current=files.length?0:-1;
+      $("meta").textContent=JSON.stringify({
+        version:obj.version,file:obj.file||null,sourceRoot:obj.sourceRoot||"",
+        sourceCount:files.length,sourcesContent:obj.sourcesContent?.length||0,
+        names:obj.names?.length||0,mappingsLength:typeof obj.mappings==="string"?obj.mappings.length:0,
+        hasSections:Array.isArray(obj.sections),debugId:obj.debugId||null
+      },null,2);
+      renderFiles();
+      if(current>=0) selectSource(current);
+      else $("editor").innerHTML='<div class="empty"><div><strong>No sources listed</strong>This map contains metadata/mappings but no <code>sources</code> entries.</div></div>';
+      setStatus(`${name} · ${files.length} sources loaded`);
+    }catch(e){
+      map=null; files=[]; current=-1; renderFiles();
+      $("editor").innerHTML='<div class="empty"><div><strong>Invalid source map</strong>'+esc(e.message)+'</div></div>';
+      setStatus("Failed to parse file");
+    }
+  }
+  $("picker").addEventListener("change",e=>{const f=e.target.files[0];if(f)f.text().then(t=>load(t,f.name))});
+  $("filter").addEventListener("input",renderFiles);
+  $("clear").onclick=()=>{map=null;files=[];current=-1;raw="";$("files").innerHTML="";$("meta").textContent="{}";$("editor").innerHTML='<div class="empty"><div><strong>No source map loaded</strong>Open or drop a JavaScript source map to inspect its recovered sources.</div></div>';setStatus("Ready")};
+  $("jsonTab").onclick=()=>{if(!map)return;$("jsonTab").classList.add("active");$("sourceTab").classList.remove("active");$("editor").innerHTML=prettySource(JSON.stringify(map,null,2));setStatus("Raw source map JSON")};
+  $("sourceTab").onclick=()=>{if(current>=0)selectSource(current)};
+  const drop=$("drop");
+  ["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("active")}));
+  ["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("active")}));
+  drop.addEventListener("drop",e=>{const f=e.dataTransfer.files[0];if(f)f.text().then(t=>load(t,f.name))});
+  document.addEventListener("dragover",e=>e.preventDefault());
+  document.addEventListener("drop",e=>e.preventDefault());
+})();
+</script>
+</body>
+</html>
